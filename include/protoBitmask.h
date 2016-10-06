@@ -140,10 +140,10 @@ class ProtoSlidingMask
         
         const char* GetMask() const {return (const char*)mask;}
         
-        bool Init(INT32 numBits, UINT32 rangeMask);
-        bool Resize(INT32 numBits);
+        bool Init(UINT32 numBits, UINT32 rangeMask);
+        bool Resize(UINT32 numBits);
         void Destroy();
-        INT32 GetSize() const {return num_bits;}
+        UINT32 GetSize() const {return num_bits;}
         void Clear()
         {
             memset(mask, 0, mask_len); 
@@ -167,9 +167,10 @@ class ProtoSlidingMask
         }
         bool GetLastSet(UINT32& index) const
         {
-            INT32 n = end - start;
-            n = (n < 0) ? (n + num_bits) : n;
-            index = offset + n; 
+            UINT32 n = (end < start) ? 
+                (num_bits - (start - end)) : 
+                (end - start);
+            index = offset + n;
             return IsSet();
         }
         bool Test(UINT32 index) const;
@@ -180,8 +181,8 @@ class ProtoSlidingMask
         bool Invert(UINT32 index)
             {return (Test(index) ? Unset(index): Set(index));}   
         
-        bool SetBits(UINT32 index, INT32 count);
-        bool UnsetBits(UINT32 index, INT32 count);
+        bool SetBits(UINT32 index, UINT32 count);
+        bool UnsetBits(UINT32 index, UINT32 count);
                 
         UINT32 GetRangeMask() const {return range_mask;}
         UINT32 GetRangeSign() const {return range_sign;}
@@ -198,27 +199,66 @@ class ProtoSlidingMask
         bool Xor(const ProtoSlidingMask & b);        // this = this ^ b
         
         void Display(FILE* stream);
-        void Debug(INT32 theCount);
-        
-    //private:
+        void Debug(UINT32 theCount);
+            
         // Calculate "circular" delta between two indices
-        INT32 Delta(UINT32 a, UINT32 b) const
+        // (If (0 == range_mask) it is an absolute 32-bit delta
+        INT32 Difference(UINT32 a, UINT32 b) const
         {
             INT32 result = a - b;
-            return ((0 == (result & range_sign)) ? 
-                        (result & range_mask) :
-                        (((result != range_sign) || (a < b)) ? 
-                            (result | ~range_mask) : result));
-        }     
-            
+            if (0 != range_mask)
+            {
+                return ((0 == (result & range_sign)) ? 
+                            (result & range_mask) :
+                            (((result != range_sign) || (a < b)) ? 
+                                (result | ~range_mask) : result));
+            }
+            else
+            {
+                return result;
+            }
+        }  
+        
+        // Compare values.  If a non-zero bit "mask" is given, the comparison
+        // is a "sliding window" (signed) over the bit space.  Otherwise, it is 
+        // simply and unsigned value comparison.
+        // Returns -1, 0, +1 for (a < b), (a == b), and (a > b), respectively
+        int Compare(UINT32 a, UINT32 b) const
+        {
+            if (0 != range_mask)
+            {
+                // "Sliding window" comparison
+                INT32 delta = Difference(a, b);
+                if (delta < 0)
+                    return -1;
+                else if (0 == delta)
+                    return 0;
+                else  // if delta > 0
+                    return 1;
+            }
+            else if (a < b)
+            {
+                return  -1;
+            }
+            else if (a == b)
+            {
+                return 0;
+            }
+            else //if (a > b)
+            {
+                return 1;
+            }
+        }
+        
+    private:
         unsigned char*  mask;
-        INT32           mask_len;
-        INT32           range_mask;
-        INT32           range_sign;
-        INT32           num_bits;
-        INT32           start;
-        INT32           end;
-        UINT32          offset;
+        UINT32           mask_len;
+        UINT32           range_mask;
+        UINT32           range_sign;
+        UINT32           num_bits;
+        UINT32           start;
+        UINT32           end;
+        UINT32           offset;
 };  // end class ProtoSlidingMask
 
 #endif // _PROTO_BITMASK_

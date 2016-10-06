@@ -1277,6 +1277,9 @@ bool ProtoSocket::Send(const char*         buffer,
                 case ENOTCONN:
                     OnNotify(NOTIFY_ERROR);
                     break;
+                case ENOBUFS:
+                    PLOG(PL_DEBUG, "ProtoSocket::Send() send() error: %s\n", GetErrorString());
+                    return false;
                 default:
                     PLOG(PL_ERROR, "ProtoSocket::Send() send() error: %s\n", GetErrorString());
                     break;
@@ -1395,14 +1398,14 @@ bool ProtoSocket::SendTo(const char*         buffer,
         if (!Send(buffer, numBytes))
         {
 
-	        PLOG(PL_WARN, "ProtoSocket::SendTo() error: Send() error\n");
+	        PLOG(PL_DEBUG, "ProtoSocket::SendTo() error: Send() error\n");
             return false;
         }
         else if (numBytes != buflen)
         {
-
-            PLOG(PL_ERROR, "ProtoSocket::SendTo() error: Send() incomplete\n");
-            return false;
+            numBytes = 0;
+            PLOG(PL_DEBUG, "ProtoSocket::SendTo() error: Send() incomplete\n");
+            return true;
         }
         else
         {
@@ -1457,10 +1460,13 @@ bool ProtoSocket::SendTo(const char*         buffer,
                 case EINTR:
                 case EAGAIN:
                     return true;
+                case ENOBUFS:
+                    PLOG(PL_DEBUG, "ProtoSocket::SendTo() sendto() error: %s\n", GetErrorString());
+                    return false;
                 default:
                     break;
             }
-	    PLOG(PL_ERROR, "ProtoSocket::SendTo() sendto() error: %s\n", GetErrorString());
+	        PLOG(PL_ERROR, "ProtoSocket::SendTo() sendto() error: %s\n", GetErrorString());
             return false;
         }
         else

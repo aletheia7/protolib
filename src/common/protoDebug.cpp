@@ -24,6 +24,9 @@
 #include <android/log.h>
 #endif
 
+#ifdef MACOSX
+#include <fcntl.h>
+#endif
     
 #if defined(PROTO_DEBUG) || defined(PROTO_MSG)
 // Note - the static debug_level, debug_log, etc variables are 
@@ -581,7 +584,7 @@ void PLOG(ProtoDebugLevel level, const char *format, ...)
         if (debug_window.IsOpen() && !debug_pipe.IsOpen() && ((stderr == debugLog) || (stdout == debugLog)))
         {
             char charBuffer[8192];
-            charBuffer[8192] = '\0';
+            charBuffer[8191] = '\0';
             int count = _vsnprintf(charBuffer, 8191, format, args);
 #ifdef _UNICODE
             wchar_t wideBuffer[8192];
@@ -664,7 +667,18 @@ void PLOG(ProtoDebugLevel level, const char *format, ...)
             __android_log_vprint(prio, "protolib", format, args);
 #else
             fprintf(debugLog, "%s", header);
-            vfprintf(debugLog, format, args);
+            if (vfprintf(debugLog, format, args) < 0)
+            {
+                // perror() seems more resilient for some reason (at least on Mac OSX)
+                char buffer[8192];
+                buffer[8191] = '\0';
+                strcpy(buffer, header);
+                va_start(args, format);
+                int count = vsnprintf(buffer + headerLen, 8191 - headerLen, format, args);
+                if ('\n' == buffer[headerLen + count - 1])
+                    buffer[headerLen + count - 1] = '\0';
+                perror(buffer);
+            }
             fflush(debugLog);
 #endif
         }

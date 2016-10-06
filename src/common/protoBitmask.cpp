@@ -383,7 +383,7 @@ bool ProtoBitmask::SetBits(UINT32 index, UINT32 count)
     {
         mask[maskIndex] |= 0x00ff >> bitIndex;
         count -= bitRemainder;
-        INT32 nbytes = count >> 3;  
+        UINT32 nbytes = count >> 3;  
         memset(&mask[++maskIndex], 0xff, nbytes);
         count &= 0x07;  
         if (count)
@@ -416,7 +416,7 @@ bool ProtoBitmask::UnsetBits(UINT32 index, UINT32 count)
     {
         mask[maskIndex] &= 0x00ff << bitRemainder;
         count -= bitRemainder;
-        INT32 nbytes = count >> 3;  
+        UINT32 nbytes = count >> 3;  
         memset(&mask[++maskIndex], 0, nbytes);
         count &= 0x07;  
         if (count) mask[maskIndex+nbytes] &= 0xff >> count;
@@ -552,19 +552,19 @@ ProtoSlidingMask::~ProtoSlidingMask()
     Destroy();
 }
 
-bool ProtoSlidingMask::Init(INT32 numBits, UINT32 rangeMask)
+bool ProtoSlidingMask::Init(UINT32 numBits, UINT32 rangeMask)
 {
     if (mask) Destroy();
     
     //TRACE("ProtoSlidingMask::Init() rangeMask>%lu (0x%0x)\n", rangeMask, rangeMask);
     
-    if ((numBits <= 0) || ((UINT32)numBits > ((rangeMask>>1)+1))) 
+    if ((0 != rangeMask) && (numBits > ((rangeMask>>1)+1))) 
         return false;
     UINT32 len = (numBits + 7) >> 3;
     if ((mask = new unsigned char[len]))
     {
         range_mask = rangeMask;
-        range_sign = (rangeMask ^ (rangeMask >> 1));
+        range_sign = rangeMask ? (rangeMask ^ (rangeMask >> 1)) : 0;
         mask_len = len;
         num_bits = numBits;
         Clear();
@@ -576,7 +576,7 @@ bool ProtoSlidingMask::Init(INT32 numBits, UINT32 rangeMask)
     }
 }  // end ProtoSlidingMask::Init()
 
-bool ProtoSlidingMask::Resize(INT32 numBits)
+bool ProtoSlidingMask::Resize(UINT32 numBits)
 {
     // 1) Backup the current state
     ProtoSlidingMask tempMask = *this;
@@ -617,13 +617,12 @@ bool ProtoSlidingMask::CanSet(UINT32 index) const
     {
         // Determine position with respect to current start
         // and end, given the "offset" of the current start  
-        INT32 pos = Delta(index, offset);
-        if (pos < 0)
+        if (Compare(index, offset) < 0)
         {
             // Precedes start.
-            pos += start;
-            if (pos < 0) pos += num_bits;
-            if (pos < 0)
+            INT32 deltaPos = start + Difference(index, offset);;
+            if (deltaPos < 0) deltaPos += num_bits;
+            if (deltaPos < 0)
             {
                 // out of range
                 return false;
@@ -631,6 +630,7 @@ bool ProtoSlidingMask::CanSet(UINT32 index) const
             else
             {
                 // Is pos between end & start?
+                UINT32 pos = (UINT32)deltaPos;
                 if (end < start)
                 {
                    if ((pos <= end) || (pos >= start)) return false; 
@@ -642,7 +642,7 @@ bool ProtoSlidingMask::CanSet(UINT32 index) const
                 return true;
             } 
         }
-        else if (pos < num_bits)
+        else if (Difference(index, offset) < num_bits)
         {
                 return true;
         }
@@ -662,20 +662,21 @@ bool ProtoSlidingMask::Set(UINT32 index)
     if (IsSet())
     {        
         // Determine position with respect to current start
-        // and end, given the "offset" of the current start               
-        INT32 pos = Delta(index, offset);  
-        if (pos < 0)
+        // and end, given the "offset" of the current start   
+        UINT32 pos;            
+        if (Compare(index, offset) < 0)
         {
             // Precedes start.
-            pos += start;
-            if (pos < 0) pos += num_bits;
-            if (pos < 0)
+            INT32 deltaPos = start + Difference(index, offset);
+            if (deltaPos < 0) deltaPos += num_bits;
+            if (deltaPos < 0)
             {
                 // out of range
                 return false;
             }
             else
             {
+                pos = (UINT32)deltaPos;
                 // Is pos between end & start?
                 if (end < start)
                 {
@@ -690,25 +691,29 @@ bool ProtoSlidingMask::Set(UINT32 index)
                 offset = index;
             } 
         }
-        else if (pos < num_bits)
+        else 
         {
-            pos += start;
-            if (pos >= num_bits) pos -= num_bits;
-            if (end < start)
+            pos = Difference(index, offset);
+            if (pos < num_bits)
             {
-                if ((pos < start) && (pos > end)) end = pos;  
+                pos += start;
+                if (pos >= num_bits) pos -= num_bits;
+                if (end < start)
+                {
+                    if ((pos < start) && (pos > end)) end = pos;  
+                }
+                else
+                {
+                    if ((pos > end) || (pos < start)) end = pos;
+                }
             }
             else
             {
-                if ((pos > end) || (pos < start)) end = pos;
+                return false;  // out of range
             }
         }
-        else
-        {
-            return false;  // out of range
-        }
         ASSERT((pos >> 3) >= 0);
-        ASSERT((pos >> 3) < (INT32)mask_len);
+        ASSERT((pos >> 3) < mask_len);
         mask[(pos >> 3)] |= (0x80 >> (pos & 0x07));
     }
     else
@@ -725,96 +730,98 @@ bool ProtoSlidingMask::Unset(UINT32 index)
     //ASSERT(CanSet(index));
     if (IsSet())
     {
-        INT32 pos = Delta(index, offset);
-        if (pos < 0)
+        if (Compare(index, offset) < 0)
         {
             return true;  // out-of-range
         }
-        else if (pos < num_bits)
+        else 
         {
-            // Is it in current range of set bits?
-            pos += start;
-            if (pos >= num_bits) pos -= num_bits;
-            if (end < start)
+            UINT32 pos = Difference(index, offset);
+            if (pos < num_bits)
             {
-                if ((pos > end) && (pos < start)) return true;   
+                // Is it in current range of set bits?
+                pos += start;
+                if (pos >= num_bits) pos -= num_bits;
+                if (end < start)
+                {
+                    if ((pos > end) && (pos < start)) return true;   
+                }
+                else
+                {
+                    if ((pos < start) || (pos > end)) return true;   
+                }
+                // Yes, it was in range.
+                // Unset the corresponding bit
+                ASSERT((pos >> 3) >= 0);
+                ASSERT((pos >> 3) < mask_len);
+                mask[(pos >> 3)] &= ~(0x80 >> (pos & 0x07));
+                if (start == end) 
+                {
+                    ASSERT(pos == start);
+                    start = end = num_bits;
+                    return true;
+                }
+                if (start == pos) 
+                {
+                    UINT32 next = index;
+                    if (!GetNextSet(next)) 
+                        ASSERT(0);
+                    ASSERT(Compare(next, offset) >= 0);
+                    UINT32 delta = Difference(next, offset);
+                    start += delta;
+                    if (start >= num_bits) start -= num_bits;
+                    offset = next;
+                }
+                if (pos == end) 
+                {
+                    UINT32 prev = index;
+                    if (!GetPrevSet(prev)) 
+                        ASSERT(0);
+                    ASSERT(Compare(prev, offset) >= 0);
+                    UINT32 delta = Difference(prev, offset);
+                    end = start + delta;
+                    if (end >= num_bits) end -= num_bits;
+                }
             }
             else
             {
-                if ((pos < start) || (pos > end)) return true;   
+                return true; // out-of-range   
             }
-            // Yes, it was in range.
-            // Unset the corresponding bit
-            ASSERT((pos >> 3) >= 0);
-            ASSERT((pos >> 3) < (INT32)mask_len);
-            mask[(pos >> 3)] &= ~(0x80 >> (pos & 0x07));
-            if (start == end) 
-            {
-                ASSERT(pos == start);
-                start = end = num_bits;
-                return true;
-            }
-            if (start == pos) 
-            {
-                UINT32 next = index;
-                if (!GetNextSet(next)) 
-                    ASSERT(0);
-                INT32 delta = Delta(next, offset);
-                ASSERT(delta >= 0);
-                start += delta;
-                if (start >= num_bits) start -= num_bits;
-                offset = next;
-            }
-            if (pos == end) 
-            {
-                UINT32 prev = index;
-                if (!GetPrevSet(prev)) 
-                    ASSERT(0);
-                INT32 delta = Delta(prev, offset);
-                ASSERT(delta >= 0);
-                end = start + delta;
-                if (end >= num_bits) end -= num_bits;
-            }
-        }
-        else
-        {
-            return true; // out-of-range   
         }
     }
     return true;
 }  // end ProtoSlidingMask::Unset()
 
-bool ProtoSlidingMask::SetBits(UINT32 index, INT32 count)
+bool ProtoSlidingMask::SetBits(UINT32 index, UINT32 count)
 {
-    if (count < 0) return false;
     if (0 == count) return true;
-    INT32 firstPos, lastPos;
+    UINT32 firstPos, lastPos;
     if (IsSet())
     {
-        INT32 last = (index + count - 1) & range_mask;
+        UINT32 last = (index + count - 1);
+        if (range_mask) last &= range_mask;
         if (!CanSet(index)) return false;
         if (!CanSet(last)) return false; 
         // Calculate first set bit position  
-        firstPos = Delta(index, offset);
-        if (firstPos < 0)
+        if (Compare(index, offset) < 0)
         {
             // precedes start
-            firstPos += start;
-            if (firstPos < 0) firstPos += num_bits;
-            start = firstPos;
+            INT32 deltaPos = start + Difference(index, offset);
+            if (deltaPos < 0) deltaPos += num_bits;
+            // The "CanSet()" checks above guarantee positive "deltaPos" here
+            start = firstPos = (UINT32)deltaPos;
             offset = index;
         }
         else
         {
-            firstPos += start;
+            firstPos = start + Difference(index, offset);
             if (firstPos >= num_bits) firstPos -= num_bits;
         }
         // Calculate last set bit position
-        lastPos = Delta(last , offset);
-        if (lastPos > 0)
+        if (Compare(last, offset) > 0)
         {
             // Is post start, post end?  
-            lastPos += start; 
+            lastPos = start + Difference(last, offset); 
             if (lastPos >= num_bits) lastPos -= num_bits;
             if (end < start)
             {
@@ -827,36 +834,39 @@ bool ProtoSlidingMask::SetBits(UINT32 index, INT32 count)
         }
         else
         {
-            lastPos += start;
-            if (lastPos < 0) lastPos += num_bits;
+            INT32 deltaPos = start + Difference(last, offset);
+            deltaPos += start;
+            if (deltaPos < 0) deltaPos += num_bits;
+            // The "CanSet()" checks above guarantee positive "deltaPos" here
+            lastPos = (UINT32)deltaPos;
         }
         if (lastPos < firstPos)
         {
             // Set bits from firstPos to num_bits   
             count = num_bits - firstPos;
-            INT32 maskIndex = firstPos >> 3;
+            UINT32 maskIndex = firstPos >> 3;
             int bitIndex = firstPos & 0x07;
             int bitRemainder = 8 - bitIndex;
             ASSERT(maskIndex >= 0);
             if (count <= bitRemainder)
             {
-                ASSERT(maskIndex < (INT32)mask_len);
+                ASSERT(maskIndex < mask_len);
                 mask[maskIndex] |= (0x00ff >> bitIndex) &
                                    (0x00ff << (bitRemainder - count)); 
             }
             else
             {
-                ASSERT(maskIndex < (INT32)mask_len);
+                ASSERT(maskIndex < mask_len);
                 mask[maskIndex] |= 0x00ff >> bitIndex;
                 count -= bitRemainder;
-                INT32 nbytes = count >> 3;  
-                ASSERT((maskIndex+1+nbytes) <= (INT32)mask_len);
+                UINT32 nbytes = count >> 3;  
+                ASSERT((maskIndex+1+nbytes) <= mask_len);
                 memset(&mask[++maskIndex], 0xff, nbytes);
                 count &= 0x07;  
                 if (count) 
                 {
                     ASSERT((maskIndex+nbytes) >= 0);
-                    ASSERT((maskIndex+nbytes) < (INT32)mask_len);
+                    ASSERT((maskIndex+nbytes) < mask_len);
                     mask[maskIndex+nbytes] |= 0xff << (8-count);
                 }
             }
@@ -867,89 +877,93 @@ bool ProtoSlidingMask::SetBits(UINT32 index, INT32 count)
     {
         if (count > num_bits) return false;
         start = firstPos = 0;
-        end = lastPos = (INT32)(count - 1);
+        end = lastPos = (count - 1);
         offset = index;
     }
     // Set bits from firstPos to lastPos   
     count = lastPos - firstPos + 1;
-    INT32 maskIndex = firstPos >> 3;
+    UINT32 maskIndex = firstPos >> 3;
     int bitIndex = firstPos & 0x07;
     int bitRemainder = 8 - bitIndex;
     ASSERT(maskIndex >= 0);
     if (count <= bitRemainder)
     {
-        ASSERT(maskIndex < (INT32)mask_len);
+        ASSERT(maskIndex < mask_len);
         mask[maskIndex] |= (0x00ff >> bitIndex) &
                             (0x00ff << (bitRemainder - count)); 
     }
     else
     {
-        ASSERT(maskIndex < (INT32)mask_len);
+        ASSERT(maskIndex < mask_len);
         mask[maskIndex] |= 0x00ff >> bitIndex;
         count -= bitRemainder;
-        INT32 nbytes = count >> 3;
-        ASSERT((maskIndex+1+nbytes) <= (INT32)mask_len);  
+        UINT32 nbytes = count >> 3;
+        ASSERT((maskIndex+1+nbytes) <= mask_len);  
         memset(&mask[++maskIndex], 0xff, nbytes);
         count &= 0x07;  
         if (count) 
         {
             ASSERT((maskIndex+nbytes) >= 0);
-            ASSERT((maskIndex+nbytes) < (INT32)mask_len);
+            ASSERT((maskIndex+nbytes) < mask_len);
             mask[maskIndex+nbytes] |= 0xff << (8-count);
         }
     }
     return true;
 }  // end ProtoSlidingMask::SetBits()
 
-bool ProtoSlidingMask::UnsetBits(UINT32 index, INT32 count)
+bool ProtoSlidingMask::UnsetBits(UINT32 index, UINT32 count)
 {
     if (IsSet())
     {
         // Trim to fit as needed.
-        INT32 firstPos;
-        if (count <= 0) return true;
+        UINT32 firstPos;
+        if (0 == count) return true;
         if (count > num_bits) count = num_bits;
-        INT32 delta = Delta(index, offset);
-        if (delta >= num_bits)
+        if (Compare(index, offset) < 0)
         {
-            return true;
-        }
-        else if (delta <= 0)
-        {
-            firstPos = start;  
-            count += delta; 
-            if (count <= 0) return true;
+            firstPos = start;
+            UINT32 diff = Difference(offset, index);
+            if (diff >= count)
+            {
+                count = 0;
+                return true;
+            }
+            count -= diff;
         }
         else
         {
-            firstPos = start + delta;
+            UINT32 diff = Difference(index, offset);
+            if (diff >= num_bits) 
+                return true; //beyond range
+            firstPos = start + diff;
             if (firstPos >= num_bits) firstPos -= num_bits;
-        }
+        } 
         UINT32 lastSet;
         if (!GetLastSet(lastSet)) 
             ASSERT(0);
-        delta = Delta(((index+count-1) & range_mask), lastSet);
-        INT32 lastPos;
-        if (delta < 0)
-        { 
+        UINT32 endex = index + count - 1;
+        if (range_mask) endex &= range_mask;
+        UINT32 lastPos;
+        if (Compare(endex, lastSet) < 0)
+        {
             lastPos = firstPos + count - 1;
-            if (lastPos >= num_bits) lastPos -= num_bits;
+            if (lastPos >= num_bits) lastPos -= num_bits;   
         }
         else
         {
             lastPos = end;
         }
-        INT32 startPos;
+        UINT32 startPos;
         if (lastPos < firstPos)
         {
             // Clear bits from firstPos to num_bits   
             count = num_bits - firstPos;
-            INT32 maskIndex = firstPos >> 3;
+            UINT32 maskIndex = firstPos >> 3;
             int bitIndex = firstPos & 0x07;
             int bitRemainder = 8 - bitIndex;
             if (count <= bitRemainder)
             {
-                ASSERT(maskIndex < (INT32)mask_len);
+                ASSERT(maskIndex < mask_len);
                 mask[maskIndex] &= (0x00ff << bitRemainder) |
                                    (0x00ff >> (bitIndex + count));
             }
@@ -958,7 +972,7 @@ bool ProtoSlidingMask::UnsetBits(UINT32 index, INT32 count)
                 ASSERT(maskIndex < mask_len);
                 mask[maskIndex] &= 0x00ff << bitRemainder;
                 count -= bitRemainder;
-                INT32 nbytes = count >> 3;  
+                UINT32 nbytes = count >> 3;  
                 ASSERT((maskIndex+1+nbytes) <= mask_len);
                 memset(&mask[++maskIndex], 0, nbytes);
                 count &= 0x07;  
@@ -976,7 +990,7 @@ bool ProtoSlidingMask::UnsetBits(UINT32 index, INT32 count)
         }
         // Unset bits from firstPos to lastPos   
         count = lastPos - startPos + 1;
-        INT32 maskIndex = startPos >> 3;
+        UINT32 maskIndex = startPos >> 3;
         int bitIndex = startPos & 0x07;
         int bitRemainder = 8 - bitIndex;
         if (count <= bitRemainder)
@@ -990,7 +1004,7 @@ bool ProtoSlidingMask::UnsetBits(UINT32 index, INT32 count)
             ASSERT(maskIndex < mask_len);
             mask[maskIndex] &= 0x00ff << bitRemainder;
             count -= bitRemainder;
-            INT32 nbytes = count >> 3;
+            UINT32 nbytes = count >> 3;
             ASSERT((maskIndex+1+nbytes) <= mask_len);
             memset(&mask[++maskIndex], 0, nbytes);
             count &= 0x07;  
@@ -1026,9 +1040,9 @@ bool ProtoSlidingMask::Test(UINT32 index) const
 {
     if (IsSet())
     {
-        INT32 pos = Delta(index , offset);
-        if (pos >= 0)
+        if (Compare(index, offset) >= 0)
         {
+            UINT32 pos = Difference(index, offset);
             // Is it in range?
             if (pos >= num_bits) return false;
             pos += start;
@@ -1055,9 +1069,9 @@ bool ProtoSlidingMask::GetNextSet(UINT32& index) const
     if (IsSet())
     {
         UINT32 next = index;
-        INT32 pos = Delta(next, offset);
-        if (pos >= 0)
+        if (Compare(next, offset) >= 0)
         {
+            UINT32 pos = Difference(next, offset);
             // Is it in range?
             if (pos >= num_bits) return false;
             pos += start;
@@ -1072,7 +1086,7 @@ bool ProtoSlidingMask::GetNextSet(UINT32& index) const
                 if ((pos < start) || (pos > end)) return false;
             }
             // Seek next set bit
-            INT32 maskIndex = pos >> 3;
+            UINT32 maskIndex = pos >> 3;
             if (mask[maskIndex])
             {
                 int w = ProtoBitmask::WEIGHT[mask[maskIndex]];
@@ -1083,10 +1097,12 @@ bool ProtoSlidingMask::GetNextSet(UINT32& index) const
                     if (loc >= remainder) 
                     {
                         pos = (maskIndex << 3) + loc;
-                        pos -= start;
-                        if (pos < 0) pos += num_bits;
+                        if (pos >= start)
+                            pos -= start;
+                        else
+                            pos = num_bits - (start - pos);
                         index = offset + pos;
-                        index &= range_mask;
+                        if (range_mask) index &= range_mask;
                         return true;
                     }
                 }
@@ -1099,25 +1115,29 @@ bool ProtoSlidingMask::GetNextSet(UINT32& index) const
                     if (mask[maskIndex])
                     {
                         pos = (maskIndex << 3) + ProtoBitmask::BITLOCS[mask[maskIndex]][0];
-                        pos -= start;
-                        if (pos < 0) pos += num_bits;
+                        if (pos >= start)
+                            pos -= start;
+                        else
+                            pos = num_bits - (start - pos);
                         index =  offset + pos;
-                        index &= range_mask;
+                        if (range_mask) index &= range_mask;
                         return true;
                     }
                 }
                 maskIndex = 0;
             }
-            INT32 endIndex = end >> 3;
+            UINT32 endIndex = end >> 3;
             for (; maskIndex <= endIndex; maskIndex++)
             {
                 if (mask[maskIndex])
                 {
                     pos = (maskIndex << 3) + ProtoBitmask::BITLOCS[mask[maskIndex]][0];
-                    pos -= start;
-                    if (pos < 0) pos += num_bits;
+                    if (pos >= start)
+                        pos -= start;
+                    else
+                        pos = num_bits - (start - pos);
                     index = offset + pos;
-                    index &= range_mask;
+                    if (range_mask) index &= range_mask;
                     return true;
                 }
             }
@@ -1136,9 +1156,9 @@ bool ProtoSlidingMask::GetPrevSet(UINT32& index) const
     if (IsSet())
     {
         UINT32 prev = index;
-        INT32 pos = Delta(prev, offset);
-        if (pos >= 0)
+        if (Compare(prev, offset) >= 0)
         {
+            UINT32 pos = Difference(prev, offset);
             // Is it in range?
             if (pos >= num_bits) 
             {
@@ -1164,7 +1184,7 @@ bool ProtoSlidingMask::GetPrevSet(UINT32& index) const
                 }
             }
             // Seek prev set bits, starting with index   
-            INT32 maskIndex = pos >> 3;
+            UINT32 maskIndex = pos >> 3;
             if (mask[maskIndex])
             {
                 int w = ProtoBitmask::WEIGHT[mask[maskIndex]] - 1;
@@ -1175,10 +1195,12 @@ bool ProtoSlidingMask::GetPrevSet(UINT32& index) const
                     if (loc <= remainder) 
                     {
                         pos = (maskIndex << 3) + loc;
-                        pos -= start;
-                        if (pos < 0) pos += num_bits;
+                        if (pos >= start)
+                            pos -= start;
+                        else
+                            pos = num_bits - (start - pos);
                         index = offset + pos;
-                        index &= range_mask;
+                        if (range_mask) index &= range_mask;
                         return true;
                     }
                 }
@@ -1186,33 +1208,38 @@ bool ProtoSlidingMask::GetPrevSet(UINT32& index) const
             maskIndex--;
             if (pos < start) 
             {
-                for(; maskIndex >= 0; maskIndex--)
+                //for(; maskIndex >= 0; maskIndex--)
+                for(; maskIndex != 0xffffffff; maskIndex--)
                 {                   
                     if (mask[maskIndex])
                     {
                         
                         int w = ProtoBitmask::WEIGHT[mask[maskIndex]] - 1;
                         pos =  (maskIndex << 3) + ProtoBitmask::BITLOCS[mask[maskIndex]][w];
-                        pos -= start;
-                        if (pos < 0) pos += num_bits;
+                        if (pos >= start)
+                            pos -= start;
+                        else
+                            pos = num_bits - (start - pos);
                         index = offset + pos;
-                        index &= range_mask;
+                        if (range_mask) index &= range_mask;
                         return true;  
                     }
                 } 
                 maskIndex = mask_len - 1;  
             }
-            INT32 startIndex = start >> 3;
+            UINT32 startIndex = start >> 3;
             for (; maskIndex >= startIndex; maskIndex--)
             {
                 if (mask[maskIndex])
                 {
                     int w = ProtoBitmask::WEIGHT[mask[maskIndex]] - 1;
                     pos =  (maskIndex << 3) + ProtoBitmask::BITLOCS[mask[maskIndex]][w];
-                    pos -= start;
-                    if (pos < 0) pos += num_bits;
+                    if (pos >= start)
+                        pos -= start;
+                    else
+                        pos = num_bits - (start - pos);
                     index = offset + pos;
-                    index &= range_mask;
+                    if (range_mask) index &= range_mask;
                     return true;  
                 }
             }
@@ -1225,8 +1252,9 @@ bool ProtoSlidingMask::Copy(const ProtoSlidingMask& b)
 {
     if (b.IsSet())
     {
-        INT32 range = b.end - b.start;
-        if (range < 0) range += b.num_bits;
+        UINT32 range = (b.end >= b.start) ?
+                            (b.end - b.start) :
+                            (b.num_bits - (b.start - b.end));
         if (range <= num_bits)
         {
             start = b.start & 0x07;
@@ -1237,8 +1265,8 @@ bool ProtoSlidingMask::Copy(const ProtoSlidingMask& b)
             end = bLastSet - bFirstSet + start;
             offset = b.offset;
             // Copy start to mask_len
-            INT32 startIndex = b.start >> 3;
-            INT32 endIndex = b.end >> 3;
+            UINT32 startIndex = b.start >> 3;
+            UINT32 endIndex = b.end >> 3;
             if (b.end < b.start)
             {
                 ASSERT((b.mask_len - startIndex) <= mask_len);
@@ -1291,11 +1319,13 @@ bool ProtoSlidingMask::Add(const ProtoSlidingMask& b)
             UINT32 bLastSet;
             b.GetFirstSet(bLastSet);
             if (!CanSet(bLastSet)) return false;
-            INT32 range = b.end - b.start;
-            if (range < 0) range += b.num_bits;
+            
+            UINT32 range = (b.end >= b.start) ?
+                                (b.end - b.start) :
+                                (b.num_bits - (b.start - b.end));
             UINT32 index;
             b.GetFirstSet(index);
-            for (INT32 i = 0; i < range; i++)
+            for (UINT32 i = 0; i < range; i++)
             {
                 // (TBD) Improve performance by getting/setting
                 //       ranges of set bits.
@@ -1321,9 +1351,10 @@ bool ProtoSlidingMask::Subtract(const ProtoSlidingMask& b)
         if (IsSet())
         {
             UINT32 index = offset;
-            INT32 range = end - start;
-            if (range < 0) range += num_bits;
-            for (INT32 i = 0; i < range; i++)
+            UINT32 range = (end >= start) ?
+                                (end - start) :
+                                (num_bits - (start - end));
+            for (UINT32 i = 0; i < range; i++)
             {
                 if (Test(index) && b.Test(index)) Unset(index);
                 index++;   
@@ -1349,9 +1380,10 @@ bool ProtoSlidingMask::XCopy(const ProtoSlidingMask& b)
             if (!CanSet(bLastSet)) return false;
             UINT32 index;
             b.GetFirstSet(index);
-            INT32 range = b.end - b.start;
-            if (range < 0) range += b.num_bits;
-            for (INT32 i = 0; i < range; i++)
+            UINT32 range = (end >= start) ?
+                                (end - start) :
+                                (num_bits - (start - end));
+            for (UINT32 i = 0; i < range; i++)
             {
                 if (Test(index))
                     Unset(index);
@@ -1380,9 +1412,10 @@ bool ProtoSlidingMask::Multiply(const ProtoSlidingMask& b)
         if (IsSet())
         {
             UINT32 index = offset;
-            INT32 range = end - start;
-            if (range < 0) range += num_bits;
-            for (INT32 i = 0; i < range; i++)
+            UINT32 range = (end >= start) ?
+                                (end - start) :
+                                (num_bits - (start - end));
+            for (UINT32 i = 0; i < range; i++)
             {
                 if (Test(index) && !b.Test(index)) Unset(index);
                 index++;   
@@ -1410,9 +1443,10 @@ bool ProtoSlidingMask::Xor(const ProtoSlidingMask& b)
         if (!CanSet(bLastSet)) return false;
         UINT32 index;
         b.GetFirstSet(index);
-        INT32 range = b.end - b.start;
-        if (range < 0) range += b.num_bits;
-        for (INT32 i = 0; i < range; i++)
+        UINT32 range = (end >= start) ?
+                            (end - start) :
+                            (num_bits - (start - end));
+        for (UINT32 i = 0; i < range; i++)
         {
             if (b.Test(index)) Invert(index);
             index++;   
@@ -1424,7 +1458,7 @@ bool ProtoSlidingMask::Xor(const ProtoSlidingMask& b)
 void ProtoSlidingMask::Display(FILE* stream)
 {
     UINT32 index = offset;
-    for (INT32 i = 0; i < num_bits; i++)
+    for (UINT32 i = 0; i < num_bits; i++)
     {
         if (Test(index++)) fprintf(stream, "1"); else fprintf(stream, "0");
         if (0x07 == (i & 0x07)) fprintf(stream, " ");
@@ -1432,12 +1466,12 @@ void ProtoSlidingMask::Display(FILE* stream)
     }
 }  // end ProtoSlidingMask::Display()
 
-void ProtoSlidingMask::Debug(INT32 theCount)
+void ProtoSlidingMask::Debug(UINT32 theCount)
 {
     UINT32 index = offset;
     theCount = MIN(theCount, num_bits);
     PLOG(PL_ERROR, "ProtoSlidingMask::Debug() offset:%lu\n   ", index);
-    INT32 i;
+    UINT32 i;
     for (i = 0; i < theCount; i++)
     {
         if (Test(index++)) PLOG(PL_ERROR, "1"); else PLOG(PL_ERROR, "0");
